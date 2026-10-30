@@ -22,6 +22,9 @@ adb shell appops set "$PKG" GET_USAGE_STATS default >/dev/null 2>&1 || true
 adb shell appops set "$PKG" android:get_usage_stats default >/dev/null 2>&1 || true
 adb shell appops set "$PKG" APP_AUTO_START default >/dev/null 2>&1 || true   # TCL only
 adb shell appops set "$PKG" APP_ASSOC_START default >/dev/null 2>&1 || true
+adb shell appops set "$PKG" AUTO_START default >/dev/null 2>&1 || true   # FFALCON T966D5's names
+adb shell appops set "$PKG" ASSOC_START default >/dev/null 2>&1 || true
+adb shell appops set "$PKG" ACCESS_RESTRICTED_SETTINGS default >/dev/null 2>&1 || true   # Android 13+
 adb shell am force-stop "$PKG"
 case "$(adb shell settings get secure screensaver_components | tr -d '\r')" in
   "$PKG"/*) adb shell settings put secure screensaver_components "$(adb shell settings get secure screensaver_default_component | tr -d '\r')" ;;

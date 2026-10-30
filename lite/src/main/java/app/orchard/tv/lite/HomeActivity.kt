@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -78,6 +79,8 @@ class HomeActivity : Activity(), HomeView.Host {
             addAction(Intent.ACTION_PACKAGE_CHANGED)
             addDataScheme("package")
         })
+        @Suppress("DEPRECATION")
+        registerReceiver(connectivity, IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION))
         if (savedInstanceState == null && SystemClock.elapsedRealtime() < 3 * 60 * 1000L) openBootApp()
     }
 
@@ -90,6 +93,7 @@ class HomeActivity : Activity(), HomeView.Host {
 
     override fun onDestroy() {
         unregisterReceiver(packages)
+        unregisterReceiver(connectivity)
         hideSaver()
         proxy.stop()
         PhoneServer.stop()
@@ -119,6 +123,7 @@ class HomeActivity : Activity(), HomeView.Host {
         super.onResume()
         resumed = true
         home.refreshClock()
+        showNetwork()
         showWeather()
         refreshDaily()
         Weather.refreshIfStale({ work.execute(it) }) { handler.post { showWeather() } }
@@ -148,11 +153,20 @@ class HomeActivity : Activity(), HomeView.Host {
         }
     }
 
+    /** Keys whose press came here and which have not been lifted yet. */
+    private val keysDown = HashSet<Int>()
+
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
         resetIdle()
+        // A lift whose press never reached us still wakes the screensaver: some remotes' keys are
+        // pressed for a vendor hotkey service and only lifted for the app (Coocaa C10, issue #915).
+        val loneLift = e.action == KeyEvent.ACTION_UP && !e.isCanceled && !keysDown.contains(e.keyCode)
+        if (e.action == KeyEvent.ACTION_DOWN) keysDown.add(e.keyCode) else keysDown.remove(e.keyCode)
         if (saver != null) {
             if (e.action == KeyEvent.ACTION_DOWN) {
                 swallow = e.keyCode
+                hideSaver()
+            } else if (loneLift) {
                 hideSaver()
             }
             return true
@@ -239,6 +253,25 @@ class HomeActivity : Activity(), HomeView.Host {
     }
 
     private val reload = Runnable { loadApps() }
+
+    /**
+     * A network or VPN coming or going (a VPN's tunnel sends CONNECTIVITY_ACTION too). The pill
+     * showed Wi-Fi whatever the network until it took the VPN badge (issue #809).
+     */
+    private val connectivity = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = showNetwork()
+    }
+
+    private fun showNetwork() {
+        work.execute {
+            val net = ControlCenter.network(this)
+            handler.post {
+                home.pill.network = net.glyph
+                home.pill.level = net.level
+                home.pill.vpn = net.vpn
+            }
+        }
+    }
 
     private val packages = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -485,6 +518,9 @@ class HomeActivity : Activity(), HomeView.Host {
         if (!keepBelow) closeAll()
         panels += p
         root.addView(p)
+        home.coveredBelow = 0
+        // Once Personalize has slid in (320 ms), Home draws only above it.
+        if (p is Personalize) handler.postDelayed({ if (panels.lastOrNull() === p) home.coveredBelow = p.covers }, 400)
         // Panels at the top right take the status pill's place, as in the full app.
         home.topRight.alpha = if (panels.any { it is ControlCenter || it is HiddenApps }) 0f else 1f
         redrawAllInSoftware()
@@ -492,6 +528,7 @@ class HomeActivity : Activity(), HomeView.Host {
 
     private fun closePanel() {
         panels.removeLastOrNull()?.let { root.removeView(it) }
+        home.coveredBelow = 0
         home.topRight.alpha = if (panels.any { it is ControlCenter || it is HiddenApps }) 0f else 1f
         redrawAllInSoftware()
     }
@@ -585,7 +622,7 @@ class HomeActivity : Activity(), HomeView.Host {
         val tryOpen = object : Runnable {
             override fun run() {
                 if (isFinishing) return
-                val online = ControlCenter.network(this@HomeActivity).first != Glyph.Offline
+                val online = ControlCenter.network(this@HomeActivity).glyph != Glyph.Offline
                 if (!online && SystemClock.elapsedRealtime() - since < 20_000) { handler.postDelayed(this, 500); return }
                 Log.i(TAG, "opening $pkg, what the TV starts on")
                 prefs.edit().putLong("elapsed", SystemClock.elapsedRealtime()).putLong("boot", bootStamp).apply()
